@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ศูนย์ฝึกอวกาศจักรวาล AR</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Mali:wght@400;600;700&display=swap" rel="stylesheet">
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            font-family: 'Mali', sans-serif;
+            margin: 0; padding: 0;
+            overflow: hidden;
+            background-color: #0f172a;
+            touch-action: none;
+            user-select: none;
+        }
+
+        /* 3D Jelly UI Styles */
+        .jelly-box {
+            border-radius: 30px;
+            border: 4px solid #ffffff;
+            box-shadow: 0 8px 0 rgba(0, 0, 0, 0.3), 0 15px 20px rgba(0, 0, 0, 0.2);
+        }
+        .jelly-btn {
+            border-radius: 30px;
+            border: 4px solid #ffffff;
+            box-shadow: 0 8px 0 rgba(0, 0, 0, 0.3);
+            transition: all 0.1s;
+            cursor: pointer;
+            pointer-events: auto;
+        }
+        .jelly-btn:active, .jelly-btn.sim-active {
+            transform: translateY(8px);
+            box-shadow: 0 0 0 rgba(0, 0, 0, 0.3);
+        }
+
+        /* Animations */
+        @keyframes pop { 0% { transform: scale(1); } 50% { transform: scale(1.15); } 100% { transform: scale(1); } }
+        .anim-pop { animation: pop 0.4s ease-out; }
+        @keyframes shake { 0%, 100% { transform: translateX(0); } 20%, 60% { transform: translateX(-10px) rotate(-5deg); } 40%, 80% { transform: translateX(10px) rotate(5deg); } }
+        .anim-shake { animation: shake 0.4s ease-in-out; }
+        @keyframes fall { to { transform: translateY(110vh) rotate(360deg); } }
+
+        /* AR Overlays */
+        #videoElement { display: none; }
+        #canvasElement {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+            object-fit: cover; z-index: 0; transform: scaleX(-1);
+        }
+        #uiLayer {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+            z-index: 10; display: flex; flex-direction: column; pointer-events: none;
+        }
+        .screen {
+            display: none; width: 100%; height: 100%; flex-direction: column;
+            align-items: center; justify-content: center; padding: 1rem; pointer-events: auto;
+        }
+        .screen.active { display: flex; }
+
+        /* AR Cursors */
+        #ar-cursor {
+            position: absolute; width: 60px; height: 60px; transform: translate(-50%, -50%);
+            pointer-events: none; z-index: 100; display: none; justify-content: center; align-items: center;
+        }
+        .progress-ring {
+            fill: transparent; stroke: #fbbf24; stroke-width: 6;
+            stroke-dasharray: 157; stroke-dashoffset: 157; stroke-linecap: round;
+        }
+
+        /* Orbit Builder Styles */
+        .orbit-slot {
+            width: 70px; height: 70px; border: 3px dashed rgba(255,255,255,0.5);
+            border-radius: 50%; display: flex; justify-content: center; align-items: center;
+            font-size: 2rem; color: rgba(255,255,255,0.5); transition: all 0.3s;
+        }
+        .orbit-slot.filled { border: 3px solid #4ade80; background: rgba(74, 222, 128, 0.2); }
+        .draggable-planet {
+            width: 70px; height: 70px; font-size: 3rem; display: flex; justify-content: center;
+            align-items: center; position: absolute; cursor: grab; filter: drop-shadow(0 5px 5px rgba(0,0,0,0.5));
+            transition: transform 0.1s;
+        }
+        .draggable-planet.dragging { transform: scale(1.3); z-index: 50; }
+
+        /* Game Elements */
+        #player-ship {
+            position: absolute; bottom: 20px; font-size: 4rem; transform: translateX(-50%);
+            transition: left 0.1s; z-index: 40; filter: drop-shadow(0 10px 10px rgba(0,0,0,0.5));
+        }
+        .asteroid {
+            position: absolute; font-size: 3.5rem; transform: translateX(-50%);
+            z-index: 30; filter: drop-shadow(0 5px 5px rgba(0,0,0,0.5));
+        }
+    </style>
+</head>
+<body>
+
+    <video id="videoElement" autoplay playsinline></video>
+    <canvas id="canvasElement"></canvas>
+
+    <div id="ar-cursor">
+        <svg viewBox="0 0 60 60" style="position:absolute; width:100%; height:100%; transform:rotate(-90deg);">
+            <circle class="progress-ring" cx="30" cy="30" r="25"></circle>
+        </svg>
+        <div id="cursor-icon" style="font-size: 30px; filter: drop-shadow(0 0 5px gold);">✨</div>
+    </div>
+
+    <div id="uiLayer">
+        
+        <div id="screen-loading" class="screen active bg-slate-900/80 backdrop-blur-sm text-white">
+            <div class="jelly-box bg-purple-600 p-8 text-center max-w-md w-full">
+                <div class="text-6xl mb-4 animate-bounce">🚀</div>
+                <h1 class="text-3xl font-bold mb-2">เชื่อมต่อยานอวกาศ...</h1>
+                <p class="text-lg">กรุณาอนุญาตใช้กล้องเพื่อใช้มือวิเศษ!</p>
+                <div class="mt-4 flex justify-center space-x-2">
+                    <div class="w-4 h-4 bg-white rounded-full animate-pulse"></div>
+                    <div class="w-4 h-4 bg-white rounded-full animate-pulse delay-75"></div>
+                    <div class="w-4 h-4 bg-white rounded-full animate-pulse delay-150"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="screen-start" class="screen">
+            <div class="jelly-box bg-blue-600/90 p-8 text-center max-w-lg w-full mt-10">
+                <h2 class="text-2xl font-bold text-yellow-300 mb-1">ศูนย์ฝึกอวกาศบ้านหนองสโน</h2>
+                <h1 class="text-4xl md:text-5xl font-bold text-white mb-6 drop-shadow-md">ภารกิจจักรวาล AR</h1>
+                <button id="btn-start" class="hand-interact jelly-btn bg-yellow-400 text-gray-900 text-2xl md:text-3xl font-bold py-4 px-8 w-full hover:bg-yellow-300">
+                    เริ่มภารกิจ! 🛸
+                </button>
+            </div>
+        </div>
+
+        <div id="screen-learn" class="screen justify-between py-6 max-h-[95vh]">
+            <div class="jelly-box bg-pink-500 text-white font-bold text-xl py-2 px-6 w-max mx-auto">
+                ด่านที่ 1: เรียนรู้ดวงดาว (ปัดมือซ้าย-ขวา)
+            </div>
+            
+            <div id="learn-card" class="jelly-box bg-white/95 p-8 text-center max-w-md w-full mx-auto my-auto transition-transform duration-300">
+                <div id="learn-emoji" class="text-9xl mb-4 filter drop-shadow-lg">☀️</div>
+                <h2 id="learn-name" class="text-4xl font-bold text-purple-700 mb-2">ดวงอาทิตย์</h2>
+                <p id="learn-desc" class="text-2xl text-gray-700">ศูนย์กลางระบบสุริยะ ร้อนแรงที่สุด!</p>
+            </div>
+
+            <div class="flex justify-between w-full max-w-md mx-auto px-4">
+                <button id="btn-prev" class="hand-interact jelly-btn bg-cyan-400 text-white text-2xl font-bold py-3 px-6">⬅️ ก่อนหน้า</button>
+                <button id="btn-next" class="hand-interact jelly-btn bg-cyan-400 text-white text-2xl font-bold py-3 px-6">ต่อไป ➡️</button>
+            </div>
+        </div>
+
+        <div id="screen-orbit" class="screen justify-start py-6 max-h-[100vh]">
+            <div class="jelly-box bg-green-500 text-white font-bold text-xl py-2 px-6 w-max mx-auto mb-4">
+                ด่านที่ 2: จัดเรียงวงโคจร (กำและแบเพื่อลากดาว)
+            </div>
+
+            <div class="bg-black/50 p-4 rounded-3xl w-full max-w-3xl flex items-center mb-6">
+                <div class="text-6xl mr-2 animate-pulse">☀️</div>
+                <div class="flex-1 grid grid-cols-4 gap-y-4 gap-x-2 justify-items-center" id="orbit-slots">
+                    </div>
+            </div>
+
+            <div id="drag-area" class="relative w-full max-w-3xl flex-1 bg-white/10 rounded-3xl border-4 border-dashed border-white/30 overflow-hidden">
+                </div>
+        </div>
+
+        <div id="screen-game" class="screen justify-start py-4 max-h-[100vh] relative overflow-hidden">
+             <div class="flex justify-between w-full max-w-3xl mx-auto px-4 z-50">
+                <div class="jelly-box bg-purple-500 text-white font-bold text-xl py-2 px-6">
+                    ด่านที่ 3: เอาชีวิตรอด!
+                </div>
+                <div class="jelly-box bg-red-500 text-white font-bold text-xl py-2 px-6">
+                    เวลา: <span id="game-time">30</span> วิ
+                </div>
+            </div>
+            
+            <div id="game-container" class="absolute top-0 left-0 w-full h-full pointer-events-none">
+                <div id="player-ship">🚀</div>
+            </div>
+        </div>
+
+        <div id="screen-result" class="screen bg-black/60 backdrop-blur-sm text-white">
+            <div class="jelly-box bg-yellow-400 p-8 text-center max-w-md w-full">
+                <div class="text-7xl mb-4">🏆</div>
+                <h1 class="text-4xl font-bold text-gray-900 mb-4">ภารกิจสำเร็จ!</h1>
+                <p class="text-2xl text-gray-800 mb-6">ยอดเยี่ยมมาก นักบินอวกาศน้อย</p>
+                <button id="btn-restart" class="hand-interact jelly-btn bg-pink-500 text-white text-2xl font-bold py-4 px-8 w-full hover:bg-pink-400">
+                    กลับฐาน (เล่นใหม่) 🔄
+                </button>
+            </div>
+        </div>
+
+    </div>
+
+<script>
+    // --- Data & State ---
+    const planetsData = [
+        { id: 1, emoji: '🌑', name: 'ดาวพุธ', desc: 'เล็กที่สุดและอยู่ใกล้ดวงอาทิตย์มากที่สุด' },
+        { id: 2, emoji: '🪐', name: 'ดาวศุกร์', desc: 'ดาวเคราะห์ที่ร้อนที่สุด สว่างรองจากดวงจันทร์ (สมมติรูปแทน)' },
+        { id: 3, emoji: '🌍', name: 'โลก', desc: 'บ้านของเรา มีน้ำและสิ่งมีชีวิต' },
+        { id: 4, emoji: '🔴', name: 'ดาวอังคาร', desc: 'ดาวเคราะห์สีแดง มีภูเขาไฟใหญ่ที่สุด' },
+        { id: 5, emoji: '🌕', name: 'ดาวพฤหัสบดี', desc: 'ใหญ่ที่สุดในระบบสุริยะ เป็นดาวเคราะห์แก๊ส' },
+        { id: 6, emoji: '🪐', name: 'ดาวเสาร์', desc: 'มีวงแหวนสวยงามทำจากน้ำแข็งและหิน' },
+        { id: 7, emoji: '🧊', name: 'ดาวยูเรนัส', desc: 'ดาวเคราะห์แก๊สสีฟ้าที่หมุนตะแคงข้าง' },
+        { id: 8, emoji: '🔵', name: 'ดาวเนปจูน', desc: 'ไกลที่สุดและมีลมพายุรุนแรงที่สุด' }
+    ];
+
+    let currentScreen = 'loading';
+    let learnIndex = 0;
+    let placedPlanets = 0;
+    let draggedPlanet = null;
+
+    // --- Audio System (Tone.js) ---
+    const synth = new Tone.PolySynth(Tone.Synth).toDestination();
+    synth.volume.value = -5;
+
+    async function playSound(type) {
+        try {
+            if(Tone.context.state !== 'running') await Tone.start();
+            if (type === 'hover') synth.triggerAttackRelease("C6", "32n");
+            else if (type === 'snap') synth.triggerAttackRelease(["C5", "G5"], "16n");
+            else if (type === 'bounce') synth.triggerAttackRelease(["C3", "C2"], "8n");
+            else if (type === 'swipe') synth.triggerAttackRelease("E5", "32n");
+            else if (type === 'boom') synth.triggerAttackRelease(["C2", "Eb2"], "4n");
+            else if (type === 'win') {
+                synth.triggerAttackRelease(["C4", "E4", "G4", "C5"], "4n");
+                setTimeout(() => synth.triggerAttackRelease(["E4", "G4", "C5", "E5"], "2n"), 400);
+            }
+        } catch (e) {}
+    }
+
+    // --- Navigation ---
+    function switchScreen(id) {
+        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+        currentScreen = id.replace('screen-', '');
+    }
+
+    // --- Phase 1: Learn ---
+    function initLearnPhase() {
+        learnIndex = 0;
+        updateLearnCard();
+        switchScreen('screen-learn');
+        
+        // Add completion button dynamically
+        if(!document.getElementById('btn-go-orbit')) {
+            const btn = document.createElement('button');
+            btn.id = 'btn-go-orbit';
+            btn.className = 'hand-interact jelly-btn bg-green-500 text-white text-2xl font-bold py-3 px-8 mt-6';
+            btn.innerText = 'ไปด่านจัดวงโคจร 🚀';
+            btn.onclick = initOrbitPhase;
+            document.getElementById('screen-learn').appendChild(btn);
+        }
+    }
+
+    function updateLearnCard() {
+        const p = planetsData[learnIndex];
+        const card = document.getElementById('learn-card');
+        card.classList.add('anim-pop');
+        setTimeout(() => card.classList.remove('anim-pop'), 400);
+        
+        document.getElementById('learn-emoji').innerText = p.emoji;
+        document.getElementById('learn-name').innerText = p.name;
+        document.getElementById('learn-desc').innerText = p.desc;
+        playSound('swipe');
+    }
+
+    // --- Phase 2: Orbit Builder ---
+    function initOrbitPhase() {
+        switchScreen('screen-orbit');
+        placedPlanets = 0;
+        const slotsContainer = document.getElementById('orbit-slots');
+        const dragArea = document.getElementById('drag-area');
+        slotsContainer.innerHTML = '';
+        dragArea.innerHTML = '';
+
+        // Create Slots
+        planetsData.forEach((p, i) => {
+            const slot = document.createElement('div');
+            slot.className = 'orbit-slot';
+            slot.dataset.id = p.id;
+            slot.innerText = i + 1;
+            slotsContainer.appendChild(slot);
+        });
+
+        // Create Draggable Planets (Shuffled)
+        let shuffled = [...planetsData].sort(() => Math.random() - 0.5);
+        shuffled.forEach(p => {
+            const el = document.createElement('div');
+            el.className = 'draggable-planet';
+            el.dataset.id = p.id;
+            el.innerText = p.emoji;
+            // Random initial position inside drag area
+            el.style.left = Math.random() * 70 + 10 + '%';
+            el.style.top = Math.random() * 60 + 10 + '%';
+            dragArea.appendChild(el);
+        });
+    }
+
+    function createTinyStars(x, y) {
+        for(let i=0; i<6; i++) {
+            const star = document.createElement('div');
+            star.innerText = '✨';
+            star.style.position = 'absolute';
+            star.style.left = x + 'px';
+            star.style.top = y + 'px';
+            star.style.pointerEvents = 'none';
+            star.style.transition = 'all 0.4s ease-out';
+            star.style.zIndex = '100';
+            document.body.appendChild(star);
+            setTimeout(() => {
+                const dx = (Math.random() - 0.5) * 150;
+                const dy = (Math.random() - 0.5) * 150;
+                star.style.transform = `translate(${dx}px, ${dy}px) scale(0)`;
+                star.style.opacity = '0';
+            }, 10);
+            setTimeout(() => star.remove(), 400);
+        }
+    }
+
+    // --- Phase 3: Asteroid Game ---
+    let gameTimer, gameLoopId;
+    let timeLeft = 30;
+    let asteroids = [];
+    const ship = document.getElementById('player-ship');
+    const gameContainer = document.getElementById('game-container');
+
+    function initGamePhase() {
+        switchScreen('screen-game');
+        timeLeft = 30;
+        document.getElementById('game-time').innerText = timeLeft;
+        asteroids.forEach(a => a.remove());
+        asteroids = [];
+        
+        gameTimer = setInterval(() => {
+            timeLeft--;
+            document.getElementById('game-time').innerText = timeLeft;
+            if (timeLeft <= 0) endGame(true);
+        }, 1000);
+
+        gameLoop();
+    }
+
+    function gameLoop() {
+        if (currentScreen !== 'game') return;
+
+        // Spawn Asteroid
+        if (Math.random() < 0.04) {
+            const a = document.createElement('div');
+            a.className = 'asteroid';
+            a.innerText = '☄️';
+            a.style.left = Math.random() * 80 + 10 + 'vw';
+            a.style.top = '-50px';
+            gameContainer.appendChild(a);
+            asteroids.push({ el: a, y: -50, speed: Math.random() * 3 + 3 });
+        }
+
+        // Move Asteroids
+        const shipRect = ship.getBoundingClientRect();
+        for (let i = asteroids.length - 1; i >= 0; i--) {
+            let ast = asteroids[i];
+            ast.y += ast.speed;
+            ast.el.style.top = ast.y + 'px';
+
+            const aRect = ast.el.getBoundingClientRect();
+            
+            // Collision detection
+            if (aRect.bottom > shipRect.top + 20 && aRect.top < shipRect.bottom &&
+                aRect.right > shipRect.left + 20 && aRect.left < shipRect.right - 20) {
+                playSound('boom');
+                ship.style.filter = 'hue-rotate(90deg) drop-shadow(0 0 20px red)';
+                setTimeout(() => ship.style.filter = '', 200);
+                // Simple penalty: minus time instead of game over to keep kids playing
+                timeLeft = Math.max(0, timeLeft - 2); 
+                document.getElementById('game-time').innerText = timeLeft;
+                ast.el.remove();
+                asteroids.splice(i, 1);
+                continue;
+            }
+
+            if (ast.y > window.innerHeight) {
+                ast.el.remove();
+                asteroids.splice(i, 1);
+            }
+        }
+        gameLoopId = requestAnimationFrame(gameLoop);
+    }
+
+    function endGame() {
+        clearInterval(gameTimer);
+        cancelAnimationFrame(gameLoopId);
+        playSound('win');
+        switchScreen('screen-result');
+        launchConfetti();
+    }
+
+    function launchConfetti() {
+        const emojis = ['⭐', '🎉', '🎈', '🚀', '✨'];
+        for (let i = 0; i < 40; i++) {
+            setTimeout(() => {
+                const conf = document.createElement('div');
+                conf.innerText = emojis[Math.floor(Math.random() * emojis.length)];
+                conf.style.position = 'absolute';
+                conf.style.fontSize = '2rem';
+                conf.style.left = Math.random() * 100 + 'vw';
+                conf.style.top = '-50px';
+                conf.style.zIndex = '100';
+                conf.style.animation = `fall ${Math.random() * 2 + 2}s linear forwards`;
+                document.body.appendChild(conf);
+                setTimeout(() => conf.remove(), 4000);
+            }, i * 50);
+        }
+    }
+
+    // --- Standard Button Listeners ---
+    document.getElementById('btn-start').onclick = () => { playSound('snap'); initLearnPhase(); };
+    document.getElementById('btn-restart').onclick = () => { playSound('snap'); switchScreen('screen-start'); };
+    document.getElementById('btn-prev').onclick = () => { 
+        if(learnIndex > 0) { learnIndex--; updateLearnCard(); }
+    };
+    document.getElementById('btn-next').onclick = () => { 
+        if(learnIndex < planetsData.length - 1) { learnIndex++; updateLearnCard(); }
+    };
+
+
+    // --- MediaPipe AR Interaction Engine ---
+    const videoElement = document.getElementById('videoElement');
+    const canvasElement = document.getElementById('canvasElement');
+    const canvasCtx = canvasElement.getContext('2d');
+    const cursor = document.getElementById('ar-cursor');
+    const cursorIcon = document.getElementById('cursor-icon');
+    const progressRing = document.querySelector('.progress-ring');
+    
+    let hoverTarget = null;
+    let hoverTime = 0;
+    let lastTime = performance.now();
+    let isPinching = false;
+    let pinchOffset = {x:0, y:0};
+
+    function onResults(results) {
+        canvasElement.width = window.innerWidth;
+        canvasElement.height = window.innerHeight;
+        canvasCtx.save();
+        canvasCtx.scale(-1, 1);
+        canvasCtx.translate(-canvasElement.width, 0);
+        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+        
+        if (results.image) {
+            const ratio = Math.max(canvasElement.width / results.image.width, canvasElement.height / results.image.height);
+            const w = results.image.width * ratio;
+            const h = results.image.height * ratio;
+            canvasCtx.drawImage(results.image, (canvasElement.width - w) / 2, (canvasElement.height - h) / 2, w, h);
+        }
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            const landmarks = results.multiHandLandmarks[0];
+            drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#ffffff', lineWidth: 3});
+            drawLandmarks(canvasCtx, landmarks, {color: '#fbbf24', lineWidth: 1, radius: 3});
+
+            // Map Coordinates (Mirrored)
+            const indexTip = landmarks[8];
+            const thumbTip = landmarks[4];
+            const cursorX = (1 - indexTip.x) * window.innerWidth;
+            const cursorY = indexTip.y * window.innerHeight;
+            const thumbX = (1 - thumbTip.x) * window.innerWidth;
+            const thumbY = thumbTip.y * window.innerHeight;
+
+            cursor.style.display = 'flex';
+            cursor.style.left = cursorX + 'px';
+            cursor.style.top = cursorY + 'px';
+
+            const now = performance.now();
+            const dt = now - lastTime;
+
+            // --- Phase 3: Game Control ---
+            if (currentScreen === 'game') {
+                cursor.style.display = 'none'; // Hide cursor in game
+                ship.style.left = cursorX + 'px'; // Move ship
+            } 
+            else {
+                // --- AR Click System ---
+                const interactables = document.querySelectorAll('.screen.active .hand-interact');
+                let currentHit = null;
+                for (let el of interactables) {
+                    const rect = el.getBoundingClientRect();
+                    if (cursorX >= rect.left && cursorX <= rect.right && cursorY >= rect.top && cursorY <= rect.bottom) {
+                        currentHit = el; break;
+                    }
+                }
+
+                if (currentHit && !draggedPlanet) {
+                    if (hoverTarget !== currentHit) {
+                        hoverTarget = currentHit; hoverTime = 0;
+                        currentHit.classList.add('sim-active'); playSound('hover');
+                    } else {
+                        hoverTime += dt;
+                        progressRing.style.strokeDashoffset = 157 - (Math.min(hoverTime / 1000, 1) * 157);
+                        if (hoverTime >= 1000) {
+                            currentHit.click();
+                            currentHit.classList.remove('sim-active');
+                            hoverTarget = null; hoverTime = 0;
+                            progressRing.style.strokeDashoffset = 157;
+                        }
+                    }
+                } else {
+                    if (hoverTarget) { hoverTarget.classList.remove('sim-active'); hoverTarget = null; }
+                    hoverTime = 0; progressRing.style.strokeDashoffset = 157;
+                }
+
+                // --- Phase 2: Pinch & Drop System ---
+                if (currentScreen === 'orbit') {
+                    // Check Pinch distance
+                    const dist = Math.hypot(cursorX - thumbX, cursorY - thumbY);
+                    const pinchThreshold = 40; // Pixels distance
+
+                    if (dist < pinchThreshold) {
+                        cursorIcon.innerText = '✊'; // visual feedback
+                        if (!isPinching) {
+                            isPinching = true;
+                            // Find planet to grab
+                            const planets = document.querySelectorAll('.draggable-planet:not(.placed)');
+                            for (let p of planets) {
+                                const rect = p.getBoundingClientRect();
+                                const pX = rect.left + rect.width/2;
+                                const pY = rect.top + rect.height/2;
+                                if (Math.hypot(cursorX - pX, cursorY - pY) < 50) {
+                                    draggedPlanet = p;
+                                    p.classList.add('dragging');
+                                    playSound('hover');
+                                    pinchOffset = { x: pX - cursorX, y: pY - cursorY };
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        // Dragging
+                        if (draggedPlanet) {
+                            draggedPlanet.style.left = (cursorX + pinchOffset.x - 35) + 'px';
+                            draggedPlanet.style.top = (cursorY + pinchOffset.y - 35) + 'px';
+                            draggedPlanet.style.position = 'fixed';
+                        }
+                    } else {
+                        cursorIcon.innerText = '✨';
+                        if (isPinching) {
+                            isPinching = false;
+                            // Release & Drop
+                            if (draggedPlanet) {
+                                draggedPlanet.classList.remove('dragging');
+                                
+                                // Check Slots intersection
+                                const slots = document.querySelectorAll('.orbit-slot:not(.filled)');
+                                let snapped = false;
+                                for (let s of slots) {
+                                    const sRect = s.getBoundingClientRect();
+                                    const dRect = draggedPlanet.getBoundingClientRect();
+                                    const dCenterX = dRect.left + dRect.width/2;
+                                    const dCenterY = dRect.top + dRect.height/2;
+                                    const sCenterX = sRect.left + sRect.width/2;
+                                    const sCenterY = sRect.top + sRect.height/2;
+
+                                    // If close enough to a slot
+                                    if (Math.hypot(dCenterX - sCenterX, dCenterY - sCenterY) < 60) {
+                                        if (draggedPlanet.dataset.id === s.dataset.id) {
+                                            // Correct!
+                                            s.appendChild(draggedPlanet);
+                                            s.classList.add('filled');
+                                            draggedPlanet.style.position = 'static';
+                                            draggedPlanet.classList.add('placed');
+                                            playSound('snap');
+                                            createTinyStars(sCenterX, sCenterY);
+                                            snapped = true;
+                                            placedPlanets++;
+                                            
+                                            if (placedPlanets === planetsData.length) {
+                                                setTimeout(initGamePhase, 1500); // Move to Game phase
+                                            }
+                                        } else {
+                                            // Wrong slot - bounce visual feedback
+                                            draggedPlanet.classList.add('anim-shake');
+                                            setTimeout(()=> draggedPlanet.classList.remove('anim-shake'), 400);
+                                        }
+                                        break;
+                                    }
+                                }
+
+                                if (!snapped) {
+                                    playSound('bounce');
+                                    // Reset position nicely inside drag area (simplified to static pos for prototype)
+                                    document.getElementById('drag-area').appendChild(draggedPlanet);
+                                    draggedPlanet.style.position = 'absolute';
+                                    draggedPlanet.style.left = Math.random() * 70 + 10 + '%';
+                                    draggedPlanet.style.top = Math.random() * 60 + 10 + '%';
+                                }
+                                draggedPlanet = null;
+                            }
+                        }
+                    }
+                }
+            }
+            lastTime = now;
+        } else {
+            cursor.style.display = 'none';
+        }
+        canvasCtx.restore();
+    }
+
+    const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+    hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
+    hands.onResults(onResults);
+
+    const camera = new Camera(videoElement, {
+        onFrame: async () => await hands.send({image: videoElement}),
+        width: 1280, height: 720, facingMode: 'user'
+    });
+
+    camera.start().then(() => {
+        setTimeout(() => switchScreen('screen-start'), 1500);
+    }).catch(err => {
+        document.querySelector('#screen-loading p').innerText = "โปรดอนุญาตกล้อง หรือรีเฟรชเบราว์เซอร์";
+    });
+
+</script>
+</body>
+</html>
